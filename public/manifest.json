@@ -1,0 +1,16 @@
+{
+  "short_name": "My Schedule",
+  "name": "My Daily Schedule",
+  "description": "Daily Routine, Checklist, and Habit Tracker with Firebase Sync",
+  "icons": [
+    {
+      "src": "/icon.svg",
+      "type": "image/svg+xml",
+      "sizes": "512x512 192x192 any"
+    }
+  ],
+  "start_url": "/",
+  "background_color": "#ffffff",
+  "theme_color": "#4f46e5",
+  "display": "standalone"
+}

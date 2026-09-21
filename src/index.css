@@ -1,0 +1,56 @@
+@import "tailwindcss";
+
+/* Peaceful Ambient Atmospheres */
+.bg-peaceful-morning {
+  background: linear-gradient(135deg, #c7d2fe 0%, #ddd6fe 20%, #fbcfe8 45%, #fed7aa 70%, #bae6fd 100%);
+  background-attachment: fixed;
+}
+
+.bg-peaceful-zen {
+  background: linear-gradient(135deg, #a7f3d0 0%, #bfdbfe 25%, #ccfbf1 50%, #fef3c7 75%, #bbf7d0 100%);
+  background-attachment: fixed;
+}
+
+.bg-peaceful-sunset {
+  background: linear-gradient(135deg, #fed7aa 0%, #fecdd3 30%, #e9d5ff 65%, #c7d2fe 100%);
+  background-attachment: fixed;
+}
+
+.bg-peaceful-twilight {
+  background: linear-gradient(135deg, #1e1b4b 0%, #312e81 35%, #1e293b 70%, #0f172a 100%);
+  background-attachment: fixed;
+}
+
+/* Frosted glass card overlay for peaceful background visibility */
+.peaceful-card {
+  background-color: rgba(255, 255, 255, 0.88);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid rgba(255, 255, 255, 0.85);
+  box-shadow: 0 10px 30px -10px rgba(79, 70, 229, 0.08), 0 4px 12px -2px rgba(0, 0, 0, 0.03);
+}
+
+.peaceful-card-dark {
+  background-color: rgba(30, 27, 75, 0.85);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid rgba(99, 102, 241, 0.2);
+  box-shadow: 0 10px 30px -10px rgba(0, 0, 0, 0.4);
+}
+
+@keyframes gentle-drift {
+  0%, 100% {
+    transform: translateY(0px) scale(1);
+  }
+  50% {
+    transform: translateY(-12px) scale(1.02);
+  }
+}
+
+.animate-gentle-drift {
+  animation: gentle-drift 9s ease-in-out infinite;
+}
+
+.animate-gentle-drift-delayed {
+  animation: gentle-drift 12s ease-in-out infinite 3s;
+}

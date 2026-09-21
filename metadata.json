@@ -1,0 +1,6 @@
+{
+  "name": "My Daily Schedule",
+  "description": "A responsive daily schedule, routine checklist, and habit tracking web app with Firebase cloud sync, streaks, and AI assistant.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
