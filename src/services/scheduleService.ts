@@ -1,237 +1,346 @@
-import {
-  collection,
-  query,
-  where,
-  onSnapshot,
-  addDoc,
-  doc,
-  setDoc,
-  deleteDoc,
-  updateDoc,
-  getDocs,
-  writeBatch,
-} from 'firebase/firestore';
-import { db } from '../firebase';
 import { Task, TaskCompletion, DailyWaterLog, MealLog } from '../types';
 
-// Real-time task listener for user's master schedule
+// Storage Keys Helper
+const getKeys = (userId: string) => ({
+  tasks: `peaceful_schedule_tasks_${userId}`,
+  completions: `peaceful_schedule_completions_${userId}`,
+  water: `peaceful_schedule_water_${userId}`,
+  meals: `peaceful_schedule_meals_${userId}`,
+});
+
+// Event dispatcher for reactive updates
+function dispatchStoreEvent(key: string) {
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new CustomEvent('peaceful_store_update', { detail: { key } }));
+  }
+}
+
+// Helper to read/write JSON safely
+function getLocal<T>(key: string, defaultValue: T): T {
+  if (typeof window === 'undefined') return defaultValue;
+  try {
+    const raw = localStorage.getItem(key);
+    return raw ? JSON.parse(raw) : defaultValue;
+  } catch (e) {
+    console.error(`Error reading ${key} from storage:`, e);
+    return defaultValue;
+  }
+}
+
+function setLocal<T>(key: string, value: T): void {
+  if (typeof window === 'undefined') return;
+  try {
+    localStorage.setItem(key, JSON.stringify(value));
+    dispatchStoreEvent(key);
+  } catch (e) {
+    console.error(`Error writing ${key} to storage:`, e);
+  }
+}
+
+// ----------------------------------------------------
+// TASKS
+// ----------------------------------------------------
+
 export function subscribeUserTasks(
   userId: string,
   onUpdate: (tasks: Task[]) => void,
-  onError?: (err: any) => void
-) {
-  const tasksRef = collection(db, 'tasks');
-  const q = query(tasksRef, where('userId', '==', userId));
+  _onError?: (err: any) => void
+): () => void {
+  const { tasks: tasksKey } = getKeys(userId);
 
-  return onSnapshot(
-    q,
-    (snapshot) => {
-      const tasks: Task[] = [];
-      snapshot.forEach((docSnap) => {
-        tasks.push({ id: docSnap.id, ...docSnap.data() } as Task);
-      });
-      // Sort tasks chronologically by time
-      tasks.sort((a, b) => (a.time || '').localeCompare(b.time || ''));
-      onUpdate(tasks);
-    },
-    (error) => {
-      console.error('Error fetching tasks:', error);
-      if (onError) onError(error);
+  const fetchAndNotify = () => {
+    const allTasks = getLocal<Task[]>(tasksKey, []);
+    allTasks.sort((a, b) => (a.time || '').localeCompare(b.time || ''));
+    onUpdate(allTasks);
+  };
+
+  // Immediate initial load
+  fetchAndNotify();
+
+  const handleUpdate = (e: Event) => {
+    const customEvt = e as CustomEvent;
+    if (!customEvt.detail || customEvt.detail.key === tasksKey) {
+      fetchAndNotify();
     }
-  );
+  };
+
+  window.addEventListener('peaceful_store_update', handleUpdate);
+  window.addEventListener('storage', fetchAndNotify);
+
+  return () => {
+    window.removeEventListener('peaceful_store_update', handleUpdate);
+    window.removeEventListener('storage', fetchAndNotify);
+  };
 }
 
-// Real-time completions listener for a specific date (or range)
+export async function createTask(taskData: Omit<Task, 'id'>): Promise<string> {
+  const { tasks: tasksKey } = getKeys(taskData.userId);
+  const tasks = getLocal<Task[]>(tasksKey, []);
+  const newId = 'task_' + Date.now() + '_' + Math.random().toString(36).substring(2, 9);
+  const newTask: Task = {
+    ...taskData,
+    id: newId,
+  };
+  tasks.push(newTask);
+  setLocal(tasksKey, tasks);
+  return newId;
+}
+
+export async function createBatchTasks(tasks: Omit<Task, 'id'>[]): Promise<void> {
+  if (tasks.length === 0) return;
+  const userId = tasks[0].userId;
+  const { tasks: tasksKey } = getKeys(userId);
+  const existing = getLocal<Task[]>(tasksKey, []);
+
+  const newItems: Task[] = tasks.map((t, idx) => ({
+    ...t,
+    id: 'task_' + Date.now() + '_' + idx + '_' + Math.random().toString(36).substring(2, 7),
+  }));
+
+  setLocal(tasksKey, [...existing, ...newItems]);
+}
+
+export async function updateTask(taskId: string, updates: Partial<Task>): Promise<void> {
+  // Locate which user owns this or search keys
+  for (let i = 0; i < localStorage.length; i++) {
+    const key = localStorage.key(i);
+    if (key && key.startsWith('peaceful_schedule_tasks_')) {
+      const tasks = getLocal<Task[]>(key, []);
+      const idx = tasks.findIndex((t) => t.id === taskId);
+      if (idx !== -1) {
+        tasks[idx] = { ...tasks[idx], ...updates };
+        setLocal(key, tasks);
+        break;
+      }
+    }
+  }
+}
+
+export async function deleteTask(taskId: string): Promise<void> {
+  for (let i = 0; i < localStorage.length; i++) {
+    const key = localStorage.key(i);
+    if (key && key.startsWith('peaceful_schedule_tasks_')) {
+      const tasks = getLocal<Task[]>(key, []);
+      const filtered = tasks.filter((t) => t.id !== taskId);
+      if (filtered.length !== tasks.length) {
+        setLocal(key, filtered);
+        break;
+      }
+    }
+  }
+}
+
+// ----------------------------------------------------
+// COMPLETIONS
+// ----------------------------------------------------
+
 export function subscribeCompletionsForDate(
   userId: string,
   date: string,
   onUpdate: (completions: Record<string, boolean>) => void
-) {
-  const compRef = collection(db, 'dailyCompletions');
-  const q = query(compRef, where('userId', '==', userId), where('date', '==', date));
+): () => void {
+  const { completions: compKey } = getKeys(userId);
 
-  return onSnapshot(q, (snapshot) => {
-    const map: Record<string, boolean> = {};
-    snapshot.forEach((docSnap) => {
-      const data = docSnap.data() as TaskCompletion;
-      if (data.completed) {
-        map[data.taskId] = true;
-      }
-    });
-    onUpdate(map);
-  });
+  const fetchAndNotify = () => {
+    const map = getLocal<Record<string, Record<string, boolean>>>(compKey, {});
+    onUpdate(map[date] || {});
+  };
+
+  fetchAndNotify();
+
+  const handleUpdate = (e: Event) => {
+    const customEvt = e as CustomEvent;
+    if (!customEvt.detail || customEvt.detail.key === compKey) {
+      fetchAndNotify();
+    }
+  };
+
+  window.addEventListener('peaceful_store_update', handleUpdate);
+  window.addEventListener('storage', fetchAndNotify);
+
+  return () => {
+    window.removeEventListener('peaceful_store_update', handleUpdate);
+    window.removeEventListener('storage', fetchAndNotify);
+  };
 }
 
-// Toggle completion of a task on a specific date
 export async function toggleTaskCompletion(
   userId: string,
   taskId: string,
   date: string,
   currentStatus: boolean
-) {
-  // Document ID scheme: `${userId}_${date}_${taskId}` for fast idempotent updates
-  const docId = `${userId}_${date}_${taskId}`;
-  const docRef = doc(db, 'dailyCompletions', docId);
-
-  const newStatus = !currentStatus;
-  await setDoc(
-    docRef,
-    {
-      userId,
-      taskId,
-      date,
-      completed: newStatus,
-      completedAt: newStatus ? new Date().toISOString() : '',
-    },
-    { merge: true }
-  );
-  return newStatus;
-}
-
-// Create a single task
-export async function createTask(taskData: Omit<Task, 'id'>): Promise<string> {
-  const colRef = collection(db, 'tasks');
-  const docRef = await addDoc(colRef, taskData);
-  return docRef.id;
-}
-
-// Batch create tasks (e.g. from AI assistant or template)
-export async function createBatchTasks(tasks: Omit<Task, 'id'>[]) {
-  const batch = writeBatch(db);
-  const colRef = collection(db, 'tasks');
-  for (const t of tasks) {
-    const newDocRef = doc(colRef);
-    batch.set(newDocRef, t);
+): Promise<boolean> {
+  const { completions: compKey } = getKeys(userId);
+  const map = getLocal<Record<string, Record<string, boolean>>>(compKey, {});
+  if (!map[date]) {
+    map[date] = {};
   }
-  await batch.commit();
+  const nextStatus = !currentStatus;
+  map[date][taskId] = nextStatus;
+  setLocal(compKey, map);
+  return nextStatus;
 }
 
-// Update task details
-export async function updateTask(taskId: string, updates: Partial<Task>) {
-  const taskRef = doc(db, 'tasks', taskId);
-  await updateDoc(taskRef, updates);
-}
+// ----------------------------------------------------
+// WATER TRACKER
+// ----------------------------------------------------
 
-// Delete task
-export async function deleteTask(taskId: string) {
-  const taskRef = doc(db, 'tasks', taskId);
-  await deleteDoc(taskRef);
-}
-
-// Water tracker listeners and updates
 export function subscribeWaterLog(
   userId: string,
   date: string,
   onUpdate: (log: DailyWaterLog | null) => void
-) {
-  const docId = `${userId}_${date}`;
-  const docRef = doc(db, 'waterLogs', docId);
-  return onSnapshot(docRef, (snapshot) => {
-    if (snapshot.exists()) {
-      onUpdate(snapshot.data() as DailyWaterLog);
-    } else {
-      onUpdate(null);
+): () => void {
+  const { water: waterKey } = getKeys(userId);
+
+  const fetchAndNotify = () => {
+    const waterMap = getLocal<Record<string, DailyWaterLog>>(waterKey, {});
+    onUpdate(waterMap[date] || null);
+  };
+
+  fetchAndNotify();
+
+  const handleUpdate = (e: Event) => {
+    const customEvt = e as CustomEvent;
+    if (!customEvt.detail || customEvt.detail.key === waterKey) {
+      fetchAndNotify();
     }
-  });
+  };
+
+  window.addEventListener('peaceful_store_update', handleUpdate);
+  window.addEventListener('storage', fetchAndNotify);
+
+  return () => {
+    window.removeEventListener('peaceful_store_update', handleUpdate);
+    window.removeEventListener('storage', fetchAndNotify);
+  };
 }
 
-export async function addWater(userId: string, date: string, addMl: number, targetMl: number = 2500) {
-  const docId = `${userId}_${date}`;
-  const docRef = doc(db, 'waterLogs', docId);
-  
-  // Read existing or create
-  const q = await getDocs(query(collection(db, 'waterLogs'), where('userId', '==', userId), where('date', '==', date)));
-  let currentAmount = 0;
-  if (!q.empty) {
-    currentAmount = (q.docs[0].data() as DailyWaterLog).amountMl || 0;
-  }
+export async function addWater(
+  userId: string,
+  date: string,
+  addMl: number,
+  targetMl: number = 2500
+): Promise<void> {
+  const { water: waterKey } = getKeys(userId);
+  const waterMap = getLocal<Record<string, DailyWaterLog>>(waterKey, {});
+  const current = waterMap[date]?.amountMl || 0;
+  const newAmount = Math.max(0, current + addMl);
 
-  const newAmount = Math.max(0, currentAmount + addMl);
-  await setDoc(docRef, {
+  waterMap[date] = {
     userId,
     date,
     amountMl: newAmount,
     targetMl,
     updatedAt: new Date().toISOString(),
-  }, { merge: true });
+  };
+
+  setLocal(waterKey, waterMap);
 }
 
-export async function resetWater(userId: string, date: string, targetMl: number = 2500) {
-  const docId = `${userId}_${date}`;
-  const docRef = doc(db, 'waterLogs', docId);
-  await setDoc(docRef, {
+export async function resetWater(
+  userId: string,
+  date: string,
+  targetMl: number = 2500
+): Promise<void> {
+  const { water: waterKey } = getKeys(userId);
+  const waterMap = getLocal<Record<string, DailyWaterLog>>(waterKey, {});
+
+  waterMap[date] = {
     userId,
     date,
     amountMl: 0,
     targetMl,
     updatedAt: new Date().toISOString(),
-  });
+  };
+
+  setLocal(waterKey, waterMap);
 }
 
-// Meal tracker functions
+// ----------------------------------------------------
+// MEALS TRACKER
+// ----------------------------------------------------
+
 export function subscribeMealLogs(
   userId: string,
   date: string,
   onUpdate: (meals: MealLog[]) => void
-) {
-  const colRef = collection(db, 'meals');
-  const q = query(colRef, where('userId', '==', userId), where('date', '==', date));
-  return onSnapshot(q, (snapshot) => {
-    const meals: MealLog[] = [];
-    snapshot.forEach((snap) => {
-      meals.push({ id: snap.id, ...snap.data() } as MealLog);
-    });
-    onUpdate(meals);
-  });
+): () => void {
+  const { meals: mealsKey } = getKeys(userId);
+
+  const fetchAndNotify = () => {
+    const allMeals = getLocal<MealLog[]>(mealsKey, []);
+    const dateMeals = allMeals.filter((m) => m.date === date);
+    onUpdate(dateMeals);
+  };
+
+  fetchAndNotify();
+
+  const handleUpdate = (e: Event) => {
+    const customEvt = e as CustomEvent;
+    if (!customEvt.detail || customEvt.detail.key === mealsKey) {
+      fetchAndNotify();
+    }
+  };
+
+  window.addEventListener('peaceful_store_update', handleUpdate);
+  window.addEventListener('storage', fetchAndNotify);
+
+  return () => {
+    window.removeEventListener('peaceful_store_update', handleUpdate);
+    window.removeEventListener('storage', fetchAndNotify);
+  };
 }
 
 export async function addMealLog(mealData: Omit<MealLog, 'id'>): Promise<string> {
-  const colRef = collection(db, 'meals');
-  const res = await addDoc(colRef, mealData);
-  return res.id;
+  const { meals: mealsKey } = getKeys(mealData.userId);
+  const allMeals = getLocal<MealLog[]>(mealsKey, []);
+  const newId = 'meal_' + Date.now() + '_' + Math.random().toString(36).substring(2, 7);
+  const newMeal: MealLog = {
+    ...mealData,
+    id: newId,
+  };
+  allMeals.push(newMeal);
+  setLocal(mealsKey, allMeals);
+  return newId;
 }
 
-export async function deleteMealLog(mealId: string) {
-  const docRef = doc(db, 'meals', mealId);
-  await deleteDoc(docRef);
+export async function deleteMealLog(mealId: string): Promise<void> {
+  for (let i = 0; i < localStorage.length; i++) {
+    const key = localStorage.key(i);
+    if (key && key.startsWith('peaceful_schedule_meals_')) {
+      const meals = getLocal<MealLog[]>(key, []);
+      const filtered = meals.filter((m) => m.id !== mealId);
+      if (filtered.length !== meals.length) {
+        setLocal(key, filtered);
+        break;
+      }
+    }
+  }
 }
 
-// Calculate streak across dates
+// ----------------------------------------------------
+// STREAKS CALCULATION
+// ----------------------------------------------------
+
 export async function calculateUserStreak(
   userId: string,
   allTasks: Task[],
   targetRate: number = 80
 ): Promise<{ currentStreak: number; bestStreak: number }> {
   try {
-    const compRef = collection(db, 'dailyCompletions');
-    const q = query(compRef, where('userId', '==', userId));
-    const snap = await getDocs(q);
+    const { completions: compKey } = getKeys(userId);
+    const dateCompletions = getLocal<Record<string, Record<string, boolean>>>(compKey, {});
 
-    // Group completions by date -> count
-    const dateCompletions: Record<string, Set<string>> = {};
-    snap.forEach((d) => {
-      const item = d.data() as TaskCompletion;
-      if (item.completed) {
-        if (!dateCompletions[item.date]) {
-          dateCompletions[item.date] = new Set();
-        }
-        dateCompletions[item.date].add(item.taskId);
-      }
-    });
-
-    // Check consecutive days starting yesterday/today backwards
     const today = new Date();
     let currentStreak = 0;
     let tempStreak = 0;
     let bestStreak = 0;
 
-    // Evaluate last 60 days
     for (let i = 0; i < 60; i++) {
       const d = new Date(today);
       d.setDate(today.getDate() - i);
       const dateStr = d.toISOString().split('T')[0];
 
-      // Eligible tasks for this date
       const eligibleTasks = allTasks.filter((t) => {
         if (t.startDate && dateStr < t.startDate) return false;
         const dayOfWeek = d.getDay();
@@ -241,12 +350,10 @@ export async function calculateUserStreak(
         return true;
       });
 
-      if (eligibleTasks.length === 0) {
-        // If no tasks on this day, skip or keep streak
-        continue;
-      }
+      if (eligibleTasks.length === 0) continue;
 
-      const completedCount = dateCompletions[dateStr]?.size || 0;
+      const dayMap = dateCompletions[dateStr] || {};
+      const completedCount = Object.values(dayMap).filter(Boolean).length;
       const rate = (completedCount / eligibleTasks.length) * 100;
       const passed = rate >= targetRate;
 
@@ -259,10 +366,7 @@ export async function calculateUserStreak(
           bestStreak = tempStreak;
         }
       } else {
-        if (i === 0) {
-          // Today not finished yet, don't break streak if yesterday was completed
-          continue;
-        }
+        if (i === 0) continue;
         tempStreak = 0;
       }
     }

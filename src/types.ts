@@ -73,3 +73,10 @@ export interface UserPreferences {
   waterTargetMl: number; // default 2500
   theme?: 'light' | 'dark';
 }
+
+export interface AuthUser {
+  uid: string;
+  email: string;
+  displayName: string;
+  photoURL?: string;
+}

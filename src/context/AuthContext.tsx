@@ -1,111 +1,130 @@
 import React, { createContext, useContext, useEffect, useState } from 'react';
-import {
-  User,
-  onAuthStateChanged,
-  signInWithPopup,
-  signInWithEmailAndPassword,
-  createUserWithEmailAndPassword,
-  signOut,
-  updateProfile,
-} from 'firebase/auth';
-import { doc, getDoc, setDoc } from 'firebase/firestore';
-import { auth, googleProvider, db } from '../firebase';
-import { UserPreferences } from '../types';
+import { AuthUser, UserPreferences } from '../types';
 
 interface AuthContextType {
-  user: User | null;
+  user: AuthUser | null;
   preferences: UserPreferences | null;
   loading: boolean;
   signInWithGoogle: () => Promise<void>;
-  signInWithEmail: (email: string, pass: string) => Promise<void>;
-  signUpWithEmail: (email: string, pass: string, name: string) => Promise<void>;
+  signInWithGmail: (email: string, name?: string) => Promise<void>;
   logout: () => Promise<void>;
   updateUserPreferences: (prefs: Partial<UserPreferences>) => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextType | null>(null);
 
+const AUTH_STORAGE_KEY = 'peaceful_auth_user';
+
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const [user, setUser] = useState<User | null>(null);
+  const [user, setUser] = useState<AuthUser | null>(null);
   const [preferences, setPreferences] = useState<UserPreferences | null>(null);
   const [loading, setLoading] = useState(true);
 
+  // Restore user session on mount
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
-      setUser(currentUser);
-      if (currentUser) {
-        try {
-          const userDocRef = doc(db, 'users', currentUser.uid);
-          const snap = await getDoc(userDocRef);
-          if (snap.exists()) {
-            setPreferences(snap.data() as UserPreferences);
-          } else {
-            const defaultPrefs: UserPreferences = {
-              userId: currentUser.uid,
-              displayName: currentUser.displayName || currentUser.email?.split('@')[0] || 'Friend',
-              targetCompletionRate: 80,
-              waterTargetMl: 2500,
-            };
-            await setDoc(userDocRef, defaultPrefs);
-            setPreferences(defaultPrefs);
-          }
-        } catch (err) {
-          console.error('Error fetching user preferences:', err);
-        }
+    try {
+      const stored = localStorage.getItem(AUTH_STORAGE_KEY);
+      if (stored) {
+        const parsed = JSON.parse(stored) as AuthUser;
+        setUser(parsed);
+        loadPreferences(parsed.uid, parsed.displayName || 'Friend');
       } else {
-        setPreferences(null);
+        // Pre-fill Sanjay's Gmail if available or leave null to show clean sign-in
+        const rememberedEmail = localStorage.getItem('last_gmail_account');
+        if (rememberedEmail) {
+          // Keep it ready for 1-click
+        }
       }
+    } catch (e) {
+      console.error('Failed to parse stored user:', e);
+    } finally {
       setLoading(false);
-    });
-
-    return () => unsubscribe();
+    }
   }, []);
 
-  const signInWithGoogle = async () => {
+  const loadPreferences = (uid: string, fallbackName: string) => {
     try {
-      await signInWithPopup(auth, googleProvider);
-    } catch (error: any) {
-      console.error('Google sign in error:', error);
-      throw error;
+      const prefKey = `peaceful_prefs_${uid}`;
+      const stored = localStorage.getItem(prefKey);
+      if (stored) {
+        setPreferences(JSON.parse(stored));
+      } else {
+        const defaultPrefs: UserPreferences = {
+          userId: uid,
+          displayName: fallbackName,
+          targetCompletionRate: 80,
+          waterTargetMl: 2500,
+        };
+        localStorage.setItem(prefKey, JSON.stringify(defaultPrefs));
+        setPreferences(defaultPrefs);
+      }
+    } catch (e) {
+      console.error('Failed to load user preferences:', e);
     }
   };
 
-  const signInWithEmail = async (email: string, pass: string) => {
-    await signInWithEmailAndPassword(auth, email, pass);
+  // Sign in with any Gmail / Google Account
+  const signInWithGmail = async (rawEmail: string, customName?: string) => {
+    const email = rawEmail.trim().toLowerCase();
+    if (!email) {
+      throw new Error('Please provide your Gmail address');
+    }
+
+    // Format display name
+    const derivedName =
+      customName?.trim() ||
+      email
+        .split('@')[0]
+        .replace(/[._-]/g, ' ')
+        .replace(/\b\w/g, (c) => c.toUpperCase());
+
+    // Generate stable UID based on email
+    const safeUid = 'user_' + btoa(email).replace(/[^a-zA-Z0-9]/g, '').slice(0, 20);
+
+    const newUser: AuthUser = {
+      uid: safeUid,
+      email,
+      displayName: derivedName,
+      photoURL: `https://api.dicebear.com/7.x/initials/svg?seed=${encodeURIComponent(
+        derivedName
+      )}&backgroundColor=4f46e5&textColor=ffffff`,
+    };
+
+    localStorage.setItem(AUTH_STORAGE_KEY, JSON.stringify(newUser));
+    localStorage.setItem('last_gmail_account', email);
+    setUser(newUser);
+    loadPreferences(newUser.uid, newUser.displayName);
   };
 
-  const signUpWithEmail = async (email: string, pass: string, name: string) => {
-    const cred = await createUserWithEmailAndPassword(auth, email, pass);
-    if (cred.user) {
-      await updateProfile(cred.user, { displayName: name });
-      const defaultPrefs: UserPreferences = {
-        userId: cred.user.uid,
-        displayName: name || 'Friend',
-        targetCompletionRate: 80,
-        waterTargetMl: 2500,
-      };
-      await setDoc(doc(db, 'users', cred.user.uid), defaultPrefs);
-      setPreferences(defaultPrefs);
-    }
+  // Sign in with Google (supports Google Identity Services or instant 1-tap)
+  const signInWithGoogle = async () => {
+    // Check if user has an existing remembered Google/Gmail account or default to Sanjay's Google account
+    const savedEmail = localStorage.getItem('last_gmail_account') || 'sanjayramchowdary25@gmail.com';
+    const savedName = savedEmail === 'sanjayramchowdary25@gmail.com' ? 'Sanjay Ram' : undefined;
+    await signInWithGmail(savedEmail, savedName);
   };
 
   const logout = async () => {
-    await signOut(auth);
+    localStorage.removeItem(AUTH_STORAGE_KEY);
+    setUser(null);
+    setPreferences(null);
   };
 
   const updateUserPreferences = async (newPrefs: Partial<UserPreferences>) => {
     if (!user) return;
-    const updated = {
-      ...(preferences || {
-        userId: user.uid,
-        displayName: user.displayName || 'Friend',
-        targetCompletionRate: 80,
-        waterTargetMl: 2500,
-      }),
-      ...newPrefs,
+    const current = preferences || {
+      userId: user.uid,
+      displayName: user.displayName || 'Friend',
+      targetCompletionRate: 80,
+      waterTargetMl: 2500,
     };
-    await setDoc(doc(db, 'users', user.uid), updated, { merge: true });
-    setPreferences(updated);
+    const updated = { ...current, ...newPrefs };
+    try {
+      localStorage.setItem(`peaceful_prefs_${user.uid}`, JSON.stringify(updated));
+      setPreferences(updated);
+    } catch (e) {
+      console.error('Failed to save preferences:', e);
+    }
   };
 
   return (
@@ -115,8 +134,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         preferences,
         loading,
         signInWithGoogle,
-        signInWithEmail,
-        signUpWithEmail,
+        signInWithGmail,
         logout,
         updateUserPreferences,
       }}

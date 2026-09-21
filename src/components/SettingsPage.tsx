@@ -209,11 +209,11 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
 
         <div className="p-3 bg-slate-50 rounded-xl border border-slate-100 text-xs space-y-1">
           <div className="flex items-center justify-between">
-            <span className="text-slate-500">Firebase UID:</span>
+            <span className="text-slate-500">Account ID:</span>
             <span className="font-mono text-[11px] text-slate-700">{user?.uid}</span>
           </div>
           <div className="flex items-center justify-between">
-            <span className="text-slate-500">Email:</span>
+            <span className="text-slate-500">Gmail Account:</span>
             <span className="font-medium text-slate-800">{user?.email || 'N/A'}</span>
           </div>
         </div>

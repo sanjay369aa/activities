@@ -1,4 +1,5 @@
 import React from 'react';
+import { useAuth } from '../context/AuthContext';
 import {
   Home,
   ListTodo,
@@ -56,6 +57,7 @@ export const Navigation: React.FC<NavigationProps> = ({
   peacefulTheme = 'morning',
   onThemeChange,
 }) => {
+  const { user } = useAuth();
   const [themeMenuOpen, setThemeMenuOpen] = React.useState(false);
   const currentTheme = THEME_OPTIONS.find((t) => t.id === peacefulTheme) || THEME_OPTIONS[0];
 
@@ -122,6 +124,31 @@ export const Navigation: React.FC<NavigationProps> = ({
                   </div>
                 )}
               </div>
+            )}
+
+            {/* User Gmail Profile Chip */}
+            {user && (
+              <button
+                type="button"
+                onClick={() => onTabChange('settings')}
+                className="flex items-center gap-1.5 p-1 sm:px-2.5 sm:py-1 rounded-full bg-slate-100 hover:bg-slate-200/80 transition-colors cursor-pointer text-slate-700 text-xs font-semibold"
+                title={`Signed in as ${user.email} (click for settings)`}
+              >
+                {user.photoURL ? (
+                  <img
+                    src={user.photoURL}
+                    alt={user.displayName}
+                    className="w-6 h-6 rounded-full object-cover"
+                  />
+                ) : (
+                  <div className="w-6 h-6 rounded-full bg-indigo-600 text-white flex items-center justify-center text-[10px] font-bold">
+                    {user.displayName?.[0] || 'G'}
+                  </div>
+                )}
+                <span className="hidden sm:inline-block max-w-[110px] truncate text-[11px] font-medium text-slate-800">
+                  {user.displayName}
+                </span>
+              </button>
             )}
 
             {/* Desktop Nav Pills */}
